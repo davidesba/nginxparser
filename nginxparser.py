@@ -2,7 +2,7 @@ import string
 
 from pyparsing import (
     Literal, White, Word, alphanums, CharsNotIn, Forward, Group, SkipTo,
-    Optional, OneOrMore, ZeroOrMore, pythonStyleComment)
+    Optional, OneOrMore, ZeroOrMore, pythonStyleComment, QuotedString)
 
 
 class NginxParser(object):
@@ -16,8 +16,10 @@ class NginxParser(object):
     semicolon = Literal(";").suppress()
     space = White().suppress()
     key = Word(alphanums + "_/")
-    value = CharsNotIn("{};")
+    value = CharsNotIn('{};"\'' + string.whitespace)
     value2 = CharsNotIn(";")
+    value_string = QuotedString('"', unquoteResults=False)
+    value_literal = QuotedString('\'', unquoteResults=False)
     location = CharsNotIn("{};," + string.whitespace)
     ifword = Literal("if")
     setword = Literal("set")
@@ -25,7 +27,8 @@ class NginxParser(object):
     modifier = Literal("=") | Literal("~*") | Literal("~") | Literal("^~")
 
     # rules
-    assignment = (key + Optional(space + value) + semicolon)
+    comment = pythonStyleComment
+    assignment = (key + ZeroOrMore(space + (value | value_literal | value_string)) + semicolon)
     setblock = (setword + OneOrMore(space + value2) + semicolon)
     block = Forward()
     ifblock = Forward()
@@ -38,17 +41,17 @@ class NginxParser(object):
         + right_bracket)
 
     subblock << ZeroOrMore(
-        Group(assignment) | block | Group(ifblock) | setblock
+        Group(assignment) | block | Group(ifblock) | setblock | comment
     )
 
     block << Group(
-        Group(key + Optional(space + modifier) + Optional(space + location))
+        Group(key + Optional(space + modifier) + Optional(OneOrMore(space + location)))
         + left_bracket
         + Group(subblock)
         + right_bracket
     )
 
-    script = OneOrMore(Group(assignment) | block).ignore(pythonStyleComment)
+    script = OneOrMore(Group(assignment) | block)
 
     def __init__(self, source):
         self.source = source
@@ -81,7 +84,7 @@ class NginxDumper(object):
         blocks = blocks or self.blocks
         for key, values in blocks:
             if current_indent:
-                yield spacer
+                yield ''
             indentation = spacer * current_indent
             if isinstance(key, list):
                 yield indentation + spacer.join(key) + ' {'
@@ -93,7 +96,10 @@ class NginxDumper(object):
                         for line in dumped:
                             yield line
                     else:
-                        dumped = spacer.join(parameter) + ';'
+                        if parameter[0] == '#':
+                            dumped = parameter
+                        else:
+                            dumped = spacer.join(parameter) + ';'
                         yield spacer * (
                             current_indent + self.indentation) + dumped
 
@@ -128,3 +134,4 @@ def dumps(blocks, indentation=4):
 
 def dump(blocks, _file, indentation=4):
     return NginxDumper(blocks, indentation).to_file(_file)
+
